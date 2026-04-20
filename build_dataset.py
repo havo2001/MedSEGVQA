@@ -266,27 +266,28 @@ def generate_qa(json_file, output_file, failed_file=None):
             json.dump(failures, f, indent=2)
 
 
-def generate_questions_for_dataset(dataset_folder):
-    train_json = os.path.join(dataset_folder, "train_prompt.json")
-    val_json = os.path.join(dataset_folder, "val_prompt.json")
-    test_json = os.path.join(dataset_folder, "test_prompt.json")
+DATASET_ROOT = "dataset"
+
+
+def generate_questions_for_dataset(dataset_name):
+    folder = os.path.join(DATASET_ROOT, dataset_name)
 
     generate_qa(
-        train_json,
-        os.path.join(dataset_folder, "train.json"),
-        os.path.join(dataset_folder, "train_failures.json"),
+        os.path.join(folder, "train_prompt.json"),
+        os.path.join(folder, "train.json"),
+        os.path.join(folder, "train_failures.json"),
     )
 
     generate_qa(
-        val_json,
-        os.path.join(dataset_folder, "val.json"),
-        os.path.join(dataset_folder, "val_failures.json"),
+        os.path.join(folder, "val_prompt.json"),
+        os.path.join(folder, "val.json"),
+        os.path.join(folder, "val_failures.json"),
     )
 
     generate_qa(
-        test_json,
-        os.path.join(dataset_folder, "test.json"),
-        os.path.join(dataset_folder, "test_failures.json"),
+        os.path.join(folder, "test_prompt.json"),
+        os.path.join(folder, "test.json"),
+        os.path.join(folder, "test_failures.json"),
     )
 
 
