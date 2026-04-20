@@ -12,125 +12,125 @@ client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 random.seed(42)
 
-def sample_intents():
+
+questions_bank = [
+    'What can you see in the image?',
+    'Describe the key finding in the image.',
+    'Is there anything wrong with the image?',
+    'Describe the abnormality in the image.',
+    'Describe the findings in this image.',
+    'Is there any abnormality in the image?',
+    'What is present in this image, and where is it located?',
+    'How many polyps are in the image, and what do they look like?',
+    'Describe any polyps in the image',
+]
+
+
+def sample_intent():
     intents = ["presence", "attribute", "location", "description"]
     weights = [0.25, 0.40, 0.20, 0.15]
-
-    yesno_intent = random.choices(intents, weights=weights, k=1)[0]
-    open_intent = random.choices(intents, weights=weights, k=1)[0]
-
-    return yesno_intent, open_intent
+    return random.choices(intents, weights=weights, k=1)[0]
 
 
 system_prompt = """
 You are generating question-answer annotations for a medical image dataset.
 
-Each input is a ground-truth description of a visible finding in a medical image.
+Each input is a ground-truth description of an image.
 
-Your task:
-Generate exactly 2 question-answer pairs:
-1. one yes/no question
-2. one open-ended question
-
---------------------------------
-Medical accuracy requirements:
---------------------------------
-- The description is the ONLY ground truth.
-- Do NOT add or infer any extra medical information.
+The description may describe:
+- a visible finding, OR
+- a normal image / absence of findings
 
 --------------------------------
-Grounding rules:
+Core principle:
 --------------------------------
-- Only use attributes explicitly present in the description.
-- Do NOT modify or generalize the description.
+The description is the ONLY ground truth.
 
 --------------------------------
-Question generation rules:
+Critical constraints:
 --------------------------------
-You will be given:
-- required yes/no intent
-- required open-ended intent
+- Do NOT add, infer, or hallucinate any information.
+- Do NOT invent findings, attributes, locations, or diagnoses.
+- Every question MUST be answerable strictly from the description.
+- The answer MUST be logically consistent with the description.
 
-You MUST follow them exactly.
+--------------------------------
+Task:
+--------------------------------
+Generate exactly 1 open-ended QA pair.
 
+--------------------------------
 Allowed intents:
+--------------------------------
 - presence
 - attribute
 - location
 - description
+
+You will be given the required intent. You MUST follow it exactly.
 
 --------------------------------
 Intent behavior:
 --------------------------------
 
 presence:
-- ask if the finding exists
+- ask whether something described (or its absence) is true
 
 attribute:
-- ask about ONE characteristic (color, shape, size, number, etc.)
+- ask about exactly ONE characteristic explicitly supported by the description
+- do NOT introduce new attributes
 
 location:
-- ask where it is located
+- ask about location ONLY if location is explicitly mentioned
+- do NOT invent locations
 
 description:
-- ask for a short grounded description
+- ask for a short grounded description of what is stated
 
 --------------------------------
-Answer rules:
+Open-ended answer rules:
 --------------------------------
-- Yes/No answer MUST be exactly: "Yes."
-- Open-ended answer must:
-  - be one short sentence
-  - answer ONLY what is asked
-  - reuse words from the description
+- must be one short sentence
+- must answer ONLY the question
+- must reuse wording from the description
+- must not add new information
 
 --------------------------------
-Output rules:
+Quality requirements:
 --------------------------------
-- Return valid JSON only
-- No explanation
-- Return exactly:
+- Question must be natural and unambiguous
+- Question must NOT require external knowledge
+- Question must NOT contradict the description
+- Question must NOT assume a finding if none is stated
+
+--------------------------------
+Output format:
+--------------------------------
+Return valid JSON only:
+
 {
   "qas": [
-    {"type": "yes_no", "question": "...", "answer": "Yes."},
     {"type": "open_ended", "question": "...", "answer": "..."}
   ]
 }
 """
 
 
-
 USER_PROMPT_TEMPLATE = """
 Ground-truth description:
 "{prompt}"
 
-Generate exactly 2 QA pairs:
-- one yes/no
-- one open-ended
+Generate exactly 1 open-ended QA pair.
 
-Required yes/no intent: {yesno_intent}
-Required open-ended intent: {open_intent}
-
-Intent definitions:
-
-- presence:
-  ask about whether the finding exists
-
-- attribute:
-  ask about one characteristic (color, shape, size, number, etc.)
-
-- location:
-  ask where the finding is located
-
-- description:
-  ask for a short description of the finding
+Required intent: {open_intent}
 
 Important:
-- You MUST follow the required intent exactly.
-- Do NOT switch intent.
-- Use only information from the description.
-- Return JSON only.
+- You MUST follow the required intent exactly
+- Use ONLY information from the description
+- Do NOT invent findings, attributes, or locations
+- Return JSON only
 """
+
 
 def call_with_retry(fn, max_retries=5, base_sleep=1.0):
     last_error = None
@@ -155,24 +155,29 @@ def parse_qas(content):
 
 
 def validate_qa(qas):
-    if not isinstance(qas, list) or len(qas) != 2:
-        return False, "Must return exactly 2 QA"
+    if not isinstance(qas, list) or len(qas) != 1:
+        return False, "Must return exactly 1 QA"
 
-    if qas[0].get("type") != "yes_no" or qas[1].get("type") != "open_ended":
-        return False, "Wrong order/types"
+    if qas[0].get("type") != "open_ended":
+        return False, "QA type must be open_ended"
 
-    if qas[0]["answer"] != "Yes.":
-        return False, "Yes/No must be 'Yes.'"
+    open_question = qas[0].get("question")
+    open_answer = qas[0].get("answer")
+
+    if not isinstance(open_question, str) or not open_question.strip():
+        return False, "Missing open-ended question"
+
+    if not isinstance(open_answer, str) or not open_answer.strip():
+        return False, "Missing open-ended answer"
 
     return True, None
 
 
 def generate_qas(prompt_text: str):
-    yesno_intent, open_intent = sample_intents()
+    open_intent = sample_intent()
 
     user_prompt = USER_PROMPT_TEMPLATE.format(
         prompt=prompt_text,
-        yesno_intent=yesno_intent,
         open_intent=open_intent,
     )
 
@@ -183,7 +188,7 @@ def generate_qas(prompt_text: str):
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt},
             ],
-            temperature=0.4,
+            temperature=0.2,
             max_tokens=300,
             response_format={"type": "json_object"},
         )
@@ -199,7 +204,7 @@ def generate_qas(prompt_text: str):
 
             valid, _ = validate_qa(qas)
             if valid:
-                return qas, yesno_intent, open_intent
+                return qas, open_intent
 
         except Exception:
             pass
@@ -222,16 +227,15 @@ def generate_qa(json_file, output_file, failed_file=None):
             mask_path = item["mask"]
             prompt_text = item["prompt"]
 
-            # baseline
             results.append({
                 "image": image_path,
                 "mask": mask_path,
                 "type": "baseline",
-                "question": prompt_text,
-                "answer": "It is segmented."
+                "question": random.choice(questions_bank),
+                "answer": prompt_text,
             })
 
-            qas, yesno_intent, open_intent = generate_qas(prompt_text)
+            qas, open_intent = generate_qas(prompt_text)
 
             for qa in qas:
                 results.append({
@@ -239,11 +243,11 @@ def generate_qa(json_file, output_file, failed_file=None):
                     "mask": mask_path,
                     "type": qa["type"],
                     "question": qa["question"],
-                    "answer": qa["answer"]
+                    "answer": qa["answer"],
                 })
 
             if idx % 50 == 0:
-                print(f"Processed {idx+1}/{len(input_data)}")
+                print(f"Processed {idx + 1}/{len(input_data)}")
 
         except Exception as e:
             failures.append({
@@ -273,7 +277,7 @@ def generate_questions_for_dataset(dataset_folder):
         os.path.join(dataset_folder, "train_failures.json"),
     )
 
-    generate_qa(    
+    generate_qa(
         val_json,
         os.path.join(dataset_folder, "val.json"),
         os.path.join(dataset_folder, "val_failures.json"),
@@ -290,5 +294,13 @@ if __name__ == "__main__":
     # generate_questions_for_dataset("UWaterloo")
     # generate_questions_for_dataset("BKAI")
     # generate_questions_for_dataset("BUID")
-    # generate_questions_for_dataset("BUSI") - problem with the no tumor case
-    
+    # generate_questions_for_dataset("BUSI")
+    # generate_questions_for_dataset("ClinicDB")
+    # generate_questions_for_dataset("ETIS")
+    # generate_questions_for_dataset("ISIC")
+    # generate_questions_for_dataset("CVC300")
+    # generate_questions_for_dataset("ColonDB")
+    # generate_questions_for_dataset("Kvasir-SEG")
+    # generate_questions_for_dataset("BUSBRA")
+    # generate_questions_for_dataset("BRISC")
+    pass
