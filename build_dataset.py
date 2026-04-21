@@ -4,6 +4,7 @@ import os
 import random
 import dotenv
 import tqdm
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from openai import OpenAI
 
 dotenv.load_dotenv()
@@ -12,6 +13,7 @@ client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 random.seed(42)
 
+MAX_WORKERS = 20
 
 questions_bank = [
     'What can you see in the image?',
@@ -150,7 +152,6 @@ def parse_qas(content):
         obj = json.loads(content)
     except Exception:
         return None
-
     return obj.get("qas")
 
 
@@ -214,49 +215,62 @@ def generate_qas(prompt_text: str):
     raise RuntimeError(f"Failed for prompt: {prompt_text}")
 
 
+def _process_item(idx, item):
+    image_path  = item["image"]
+    mask_path   = item["mask"]
+    prompt_text = item["prompt"]
+
+    baseline = {
+        "image":    image_path,
+        "mask":     mask_path,
+        "type":     "baseline",
+        "question": random.choice(questions_bank),
+        "answer":   prompt_text,
+    }
+
+    qas, _ = generate_qas(prompt_text)
+
+    rows = [baseline] + [
+        {
+            "image":    image_path,
+            "mask":     mask_path,
+            "type":     qa["type"],
+            "question": qa["question"],
+            "answer":   qa["answer"],
+        }
+        for qa in qas
+    ]
+    return idx, rows
+
+
 def generate_qa(json_file, output_file, failed_file=None):
     with open(json_file, "r") as f:
         input_data = json.load(f)
 
-    results = []
-    failures = []
+    results_map = {}
+    failures    = []
 
-    for idx, item in enumerate(tqdm.tqdm(input_data)):
-        try:
-            image_path = item["image"]
-            mask_path = item["mask"]
-            prompt_text = item["prompt"]
+    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+        futures = {
+            executor.submit(_process_item, idx, item): (idx, item)
+            for idx, item in enumerate(input_data)
+        }
 
-            results.append({
-                "image": image_path,
-                "mask": mask_path,
-                "type": "baseline",
-                "question": random.choice(questions_bank),
-                "answer": prompt_text,
-            })
-
-            qas, open_intent = generate_qas(prompt_text)
-
-            for qa in qas:
-                results.append({
-                    "image": image_path,
-                    "mask": mask_path,
-                    "type": qa["type"],
-                    "question": qa["question"],
-                    "answer": qa["answer"],
+        for future in tqdm.tqdm(as_completed(futures), total=len(futures)):
+            idx, item = futures[future]
+            try:
+                idx, rows = future.result()
+                results_map[idx] = rows
+            except Exception as e:
+                failures.append({
+                    "image":  item.get("image"),
+                    "mask":   item.get("mask"),
+                    "prompt": item.get("prompt"),
+                    "error":  repr(e),
                 })
+                print(f"Failed idx={idx}: {e}")
 
-            if idx % 50 == 0:
-                print(f"Processed {idx + 1}/{len(input_data)}")
-
-        except Exception as e:
-            failures.append({
-                "image": item.get("image"),
-                "mask": item.get("mask"),
-                "prompt": item.get("prompt"),
-                "error": repr(e),
-            })
-            print(f"Failed: {e}")
+    results = [row for idx in sorted(results_map) for row in results_map[idx]]
 
     with open(output_file, "w") as f:
         json.dump(results, f, indent=2)
@@ -304,4 +318,4 @@ if __name__ == "__main__":
     # generate_questions_for_dataset("Kvasir-SEG")
     # generate_questions_for_dataset("BUSBRA")
     # generate_questions_for_dataset("BRISC")
-    pass
+    generate_questions_for_dataset("EUS")
