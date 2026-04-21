@@ -40,13 +40,14 @@ You are generating question-answer annotations for a medical image dataset.
 Each input is a ground-truth description of an image.
 
 The description may describe:
-- a visible finding, OR
-- a normal image / absence of findings
+- a visible finding / abnormality, OR
+- a normal image with no findings
 
 --------------------------------
 Core principle:
 --------------------------------
 The description is the ONLY ground truth.
+NEVER assume a finding exists if the description says the image is normal.
 
 --------------------------------
 Critical constraints:
@@ -55,6 +56,9 @@ Critical constraints:
 - Do NOT invent findings, attributes, locations, or diagnoses.
 - Every question MUST be answerable strictly from the description.
 - The answer MUST be logically consistent with the description.
+- If the description says the image is normal or shows no findings,
+  the question and answer MUST reflect normality — never ask about
+  an abnormality that is not mentioned.
 
 --------------------------------
 Task:
@@ -76,18 +80,27 @@ Intent behavior:
 --------------------------------
 
 presence:
-- ask whether something described (or its absence) is true
+- For NORMAL images: ask whether any abnormality or finding is present.
+  Answer must confirm absence (e.g. "No abnormality is visible.").
+- For ABNORMAL images: ask whether the described finding is present.
+  Answer must confirm its presence.
 
 attribute:
-- ask about exactly ONE characteristic explicitly supported by the description
-- do NOT introduce new attributes
+- For NORMAL images: ask about a normal characteristic explicitly stated
+  in the description (e.g. echogenicity, texture, appearance).
+  If no attribute is stated, treat as description intent instead.
+- For ABNORMAL images: ask about exactly ONE characteristic of the finding.
+- Do NOT introduce attributes not in the description.
 
 location:
-- ask about location ONLY if location is explicitly mentioned
-- do NOT invent locations
+- Ask about location ONLY if a location is explicitly mentioned.
+- For NORMAL images with no location stated, treat as description intent.
+- Do NOT invent locations.
 
 description:
-- ask for a short grounded description of what is stated
+- Ask for a short grounded description of what the image shows.
+- For NORMAL images: the answer should describe the normal appearance.
+- For ABNORMAL images: the answer should describe the finding.
 
 --------------------------------
 Open-ended answer rules:
@@ -104,6 +117,8 @@ Quality requirements:
 - Question must NOT require external knowledge
 - Question must NOT contradict the description
 - Question must NOT assume a finding if none is stated
+- For normal images, questions like "What abnormality is present?"
+  are FORBIDDEN — use "Is there any abnormality?" instead
 
 --------------------------------
 Output format:
@@ -318,4 +333,4 @@ if __name__ == "__main__":
     # generate_questions_for_dataset("Kvasir-SEG")
     # generate_questions_for_dataset("BUSBRA")
     # generate_questions_for_dataset("BRISC")
-    generate_questions_for_dataset("EUS")
+    generate_questions_for_dataset("QaTa-COV19")
