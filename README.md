@@ -32,10 +32,13 @@ The best checkpoint is saved based on average gIoU across these 4 datasets.
   --version="xinlai/LISA-13B-llama2-v1" \
   --dataset_dir='./dataset' \
   --vision_pretrained="sam_vit_h_4b8939.pth" \
-  --train_datasets="BUSI,BKAI,BUID,BUSBRA,ClinicDB,ColonDB,CVC300,ETIS,ISIC,Kvasir-SEG,UWaterloo" \
-  --exp_name="lisa-7b-busi" \
-  --epochs=2 \
-  --steps_per_epoch=100
+  --train_datasets="BUSI" \
+  --val_dataset="BUSI" \ #remove this line if you want to run validation seperately
+  --val_split="test" \ #remove this line if you want to run validation seperately
+  --exp_name="lisa-13b-busi" \
+  --epochs=20 \
+  --steps_per_epoch=500 \ 
+  --batch_size 4
 ```
 
 ---

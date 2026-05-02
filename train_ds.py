@@ -244,11 +244,10 @@ def main(args):
     else:
         train_dataset = None
 
-    # ---- val loaders for per-epoch evaluation (fixed set) ----
-    TRAIN_VAL_DATASETS = ["BUSI", "ISIC", "Kvasir-SEG", "BUID"]
+    # ---- val loaders for per-epoch evaluation (only the training datasets) ----
     val_loaders = {}   # {dataset_name: DataLoader}
     if not args.no_eval and not args.eval_only:
-        for ds_name in TRAIN_VAL_DATASETS:
+        for ds_name in [n.strip() for n in args.train_datasets.split(",")]:
             loader = _make_val_loader(ds_name, "val", args, tokenizer, _collate)
             if loader is not None:
                 val_loaders[ds_name] = loader
@@ -336,14 +335,27 @@ def main(args):
         if is_best:
             save_dir = os.path.join(args.log_dir, "ckpt_model")
             if args.local_rank == 0:
-                torch.save(
-                    {"epoch": epoch},
-                    os.path.join(args.log_dir, f"meta_log_giou{best_score:.3f}_ciou{cur_ciou:.3f}.pth"),
-                )
                 if os.path.exists(save_dir):
                     shutil.rmtree(save_dir)
             torch.distributed.barrier()
             model_engine.save_checkpoint(save_dir)
+
+    # ---- post-training test on {val_dataset}/{val_split} ----
+    if not args.eval_only:
+        test_loader = _make_val_loader(args.val_dataset, args.val_split, args, tokenizer, _collate)
+        if test_loader is not None:
+            save_dir = os.path.join(args.log_dir, "ckpt_model")
+            if os.path.exists(save_dir):
+                model_engine.load_checkpoint(save_dir)
+                if args.local_rank == 0:
+                    print(f"Loaded best checkpoint from {save_dir} for test")
+            validate(test_loader, model_engine, args.epochs, writer, args,
+                     dataset_name=args.val_dataset, save_output=True)
+            if args.distributed:
+                torch.distributed.barrier()
+            if args.local_rank == 0 and os.path.exists(save_dir):
+                shutil.rmtree(save_dir)
+                print(f"Deleted {save_dir} after test")
 
 
 # ---------------------------------------------------------------------------
@@ -508,31 +520,6 @@ def validate(val_loader, model_engine, epoch, writer, args,
                 "predicted_mask": mask_rel,
                 "answer":         answer,
             })
-
-        # ---- visualise during training (rank 0 only) ----
-        if not save_output and args.local_rank == 0:
-            vis_dir = os.path.join(args.vis_save_path, f"epoch_{epoch}", dataset_name)
-            os.makedirs(vis_dir, exist_ok=True)
-            image_path = input_dict["image_paths"][0]
-            image_stem = os.path.splitext(os.path.basename(image_path))[0]
-            image_np   = cv2.cvtColor(cv2.imread(image_path), cv2.COLOR_BGR2RGB)
-
-            for i, pred_i in enumerate(pred_masks[0]):
-                pred_np = (pred_i.detach().float() > 0).cpu().numpy().astype(np.uint8)
-                cv2.imwrite(os.path.join(vis_dir, f"{image_stem}_mask_{i}.png"), pred_np * 255)
-
-                pred_vis = pred_np.astype(bool)
-                if pred_vis.shape != image_np.shape[:2]:
-                    pred_vis = cv2.resize(
-                        pred_np, (image_np.shape[1], image_np.shape[0]),
-                        interpolation=cv2.INTER_NEAREST,
-                    ).astype(bool)
-                overlay = image_np.copy()
-                overlay[pred_vis] = (0.5 * overlay[pred_vis] + 0.5 * np.array([255, 0, 0])).astype(np.uint8)
-                cv2.imwrite(
-                    os.path.join(vis_dir, f"{image_stem}_overlay_{i}.png"),
-                    cv2.cvtColor(overlay, cv2.COLOR_RGB2BGR),
-                )
 
         # ---- metrics ----
         intersection, union, acc_iou, acc_dice = 0.0, 0.0, 0.0, 0.0
