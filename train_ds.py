@@ -136,6 +136,9 @@ def main(args):
     else:
         writer = None
 
+    # ---- distributed process group (needed by DistributedSampler before deepspeed.initialize) ----
+    deepspeed.init_distributed()
+
     # ---- tokenizer ----
     tokenizer = transformers.AutoTokenizer.from_pretrained(
         args.version,
