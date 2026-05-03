@@ -159,7 +159,8 @@ class MedDataset(torch.utils.data.Dataset):
         self.samples = []
         for path in json_paths:
             with open(path) as f:
-                self.samples.extend(json.load(f))
+                data = json.load(f)
+            self.samples.extend(s for s in data if s.get("type") == "baseline")
 
         self.transform           = ResizeLongestSide(image_size)
         self.clip_image_processor = CLIPImageProcessor.from_pretrained(vision_tower)
