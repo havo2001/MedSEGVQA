@@ -29,17 +29,17 @@ The best checkpoint is saved based on average gIoU across these 4 datasets.
 
 ```bash
 # Remove --val_dataset and --val_split if you want to run validation separately
-!deepspeed --master_port=24999 train_ds.py \                                                                                       
-  --version="xinlai/LISA-13B-llama2-v1" \                                                                                          
-  --dataset_dir="./dataset" \                                                                                                      
-  --vision_pretrained="sam_vit_h_4b8939.pth" \
-  --train_datasets="{dataset_name}" \                                                                                              
-  --val_dataset="{dataset_name}" \                                                                                                 
-  --val_split="test" \
-  --exp_name="{exp_name}" \                                                                                                        
-  --epochs=20 \ 
-  --steps_per_epoch=500 \
-  --batch_size=4    
+!deepspeed --master_port=24999 train_ds.py \
+--version="xinlai/LISA-13B-llama2-v1" \
+--dataset_dir="./dataset" \
+--vision_pretrained="sam_vit_h_4b8939.pth" \
+--train_datasets="{dataset_name}" \
+--val_dataset="{dataset_name}" \
+--val_split="test" \
+--exp_name="{exp_name}" \
+--epochs=20 \
+--steps_per_epoch=500 \
+--batch_size=4
 ```
 
 ---
