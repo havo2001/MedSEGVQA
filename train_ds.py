@@ -356,9 +356,7 @@ def main(args):
                      dataset_name=args.val_dataset, save_output=True)
             if args.distributed:
                 torch.distributed.barrier()
-            if args.local_rank == 0 and os.path.exists(save_dir):
-                shutil.rmtree(save_dir)
-                print(f"Deleted {save_dir} after test")
+            
 
 
 # ---------------------------------------------------------------------------
