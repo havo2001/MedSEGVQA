@@ -80,7 +80,10 @@ class LisaMetaModel:
             self.vision_pretrained = kwargs.get("vision_pretrained", None)
         else:
             self.vision_pretrained = kwargs.get("vision_pretrained", None)
-            if not hasattr(self.config, "sam_variant"):
+            sam_variant = kwargs.get("sam_variant", None)
+            if sam_variant is not None:
+                self.config.sam_variant = sam_variant
+            elif not hasattr(self.config, "sam_variant"):
                 self.config.sam_variant = "sam_vit_h"
             self.initialize_lisa_modules(self.config)
 
