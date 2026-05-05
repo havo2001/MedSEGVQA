@@ -10,7 +10,12 @@ from utils.utils import (DEFAULT_IM_END_TOKEN, DEFAULT_IM_START_TOKEN,
 
 from .llava.model.language_model.llava_llama import (LlavaLlamaForCausalLM,
                                                      LlavaLlamaModel)
-from .segment_anything import build_sam_vit_h
+from .segment_anything import build_sam_vit_b, build_sam_vit_h
+
+_SAM_BUILDERS = {
+    "sam_vit_h":    build_sam_vit_h,
+    "medsam_vit_b": build_sam_vit_b,
+}
 
 
 def dice_loss(
@@ -71,14 +76,18 @@ class LisaMetaModel:
         if not hasattr(self.config, "train_mask_decoder"):
             self.config.train_mask_decoder = kwargs["train_mask_decoder"]
             self.config.out_dim = kwargs["out_dim"]
+            self.config.sam_variant = kwargs.get("sam_variant", "sam_vit_h")
             self.vision_pretrained = kwargs.get("vision_pretrained", None)
         else:
             self.vision_pretrained = kwargs.get("vision_pretrained", None)
+            if not hasattr(self.config, "sam_variant"):
+                self.config.sam_variant = "sam_vit_h"
             self.initialize_lisa_modules(self.config)
 
     def initialize_lisa_modules(self, config):
-        # SAM
-        self.visual_model = build_sam_vit_h(self.vision_pretrained)
+        # SAM / MedSAM
+        builder = _SAM_BUILDERS[config.sam_variant]
+        self.visual_model = builder(self.vision_pretrained)
         for param in self.visual_model.parameters():
             param.requires_grad = False
         if config.train_mask_decoder:

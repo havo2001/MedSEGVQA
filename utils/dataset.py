@@ -150,11 +150,13 @@ class MedDataset(torch.utils.data.Dataset):
         base_dir="./dataset", # prepended to relative image/mask paths in JSON
         image_size=1024,
         inference=False,
+        sam_variant="sam_vit_h",  # "sam_vit_h" | "medsam_vit_b"
     ):
         self.base_dir    = base_dir
         self.image_size  = image_size
         self.inference   = inference
         self.tokenizer   = tokenizer
+        self.sam_variant = sam_variant
 
         self.samples = []
         for path in json_paths:
@@ -162,7 +164,7 @@ class MedDataset(torch.utils.data.Dataset):
                 data = json.load(f)
             self.samples.extend(s for s in data if s.get("type") == "baseline")
 
-        self.transform           = ResizeLongestSide(image_size)
+        self.transform = ResizeLongestSide(image_size)
         self.clip_image_processor = CLIPImageProcessor.from_pretrained(vision_tower)
 
     def __len__(self):
@@ -201,6 +203,11 @@ class MedDataset(torch.utils.data.Dataset):
         if image_np is None:
             raise FileNotFoundError(f"Cannot read image: {image_path}")
         image_np = cv2.cvtColor(image_np, cv2.COLOR_BGR2RGB)
+
+        # MedSAM-style per-image min–max rescale to [0, 255] before SAM normalize
+        if self.sam_variant == "medsam_vit_b":
+            lo, hi = float(image_np.min()), float(image_np.max())
+            image_np = ((image_np - lo) / max(hi - lo, 1e-8) * 255.0).astype(np.uint8)
 
         # --- load mask → binary [1, H, W] ---
         # Read as BGR so color masks (e.g. BKAI) are handled correctly:

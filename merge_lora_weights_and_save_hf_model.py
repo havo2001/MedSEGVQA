@@ -31,6 +31,8 @@ def parse_args(args):
         help="precision for inference",
     )
     parser.add_argument("--vision_pretrained", default="PATH_TO_SAM_ViT-H", type=str)
+    parser.add_argument("--sam_variant", default="sam_vit_h", type=str,
+                        choices=["sam_vit_h", "medsam_vit_b"])
     parser.add_argument("--out_dim", default=256, type=int)
     parser.add_argument("--image_size", default=1024, type=int, help="image size")
     parser.add_argument("--model_max_length", default=512, type=int)
@@ -81,6 +83,7 @@ def main(args):
         "out_dim": args.out_dim,
         "seg_token_idx": args.seg_token_idx,
         "vision_tower": args.vision_tower,
+        "sam_variant": args.sam_variant,
     }
 
     torch_dtype = torch.float32

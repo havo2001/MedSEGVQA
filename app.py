@@ -41,6 +41,8 @@ def parse_args(args):
     parser.add_argument("--load_in_8bit", action="store_true", default=False)
     parser.add_argument("--load_in_4bit", action="store_true", default=False)
     parser.add_argument("--use_mm_start_end", action="store_true", default=True)
+    parser.add_argument("--sam_variant", default="sam_vit_h", type=str,
+                        choices=["sam_vit_h", "medsam_vit_b"])
     parser.add_argument(
         "--conv_type",
         default="llava_v1",
@@ -237,6 +239,10 @@ def inference(input_str, input_image):
     image_np = cv2.imread(input_image)
     image_np = cv2.cvtColor(image_np, cv2.COLOR_BGR2RGB)
     original_size_list = [image_np.shape[:2]]
+
+    if args.sam_variant == "medsam_vit_b":
+        lo, hi = float(image_np.min()), float(image_np.max())
+        image_np = ((image_np - lo) / max(hi - lo, 1e-8) * 255.0).astype(np.uint8)
 
     image_clip = (
         clip_image_processor.preprocess(image_np, return_tensors="pt")[

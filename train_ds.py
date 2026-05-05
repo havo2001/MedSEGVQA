@@ -80,6 +80,9 @@ def parse_args(args):
     parser.add_argument("--no_eval", action="store_true", default=False)
     parser.add_argument("--eval_only", action="store_true", default=False)
     parser.add_argument("--vision_pretrained", default="PATH_TO_SAM_ViT-H", type=str)
+    parser.add_argument("--sam_variant", default="sam_vit_h", type=str,
+                        choices=["sam_vit_h", "medsam_vit_b"],
+                        help="Which SAM-family encoder to use as the visual backbone.")
     parser.add_argument("--out_dim", default=256, type=int)
     parser.add_argument("--resume", default="", type=str)
     parser.add_argument("--print_freq", default=1, type=int)
@@ -109,6 +112,7 @@ def _make_val_loader(ds_name, split, args, tokenizer, _collate):
         base_dir=args.dataset_dir,
         image_size=args.image_size,
         inference=True,
+        sam_variant=args.sam_variant,
     )
     sampler = torch.utils.data.distributed.DistributedSampler(ds, shuffle=False, drop_last=False)
     return torch.utils.data.DataLoader(
@@ -164,6 +168,7 @@ def main(args):
         "vision_pretrained": args.vision_pretrained,
         "vision_tower": args.vision_tower,
         "use_mm_start_end": args.use_mm_start_end,
+        "sam_variant": args.sam_variant,
     }
     torch_dtype = {"bf16": torch.bfloat16, "fp16": torch.half}.get(args.precision, torch.float32)
     model = LISAForCausalLM.from_pretrained(
@@ -242,6 +247,7 @@ def main(args):
             base_dir=args.dataset_dir,
             image_size=args.image_size,
             inference=False,
+            sam_variant=args.sam_variant,
         )
         print(f"Training: {len(train_dataset)} samples")
     else:

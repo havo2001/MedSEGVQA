@@ -79,7 +79,8 @@ output/BUSI/
 | `--dataset_dir` | `./dataset` | Root directory of all datasets |
 | `--output_dir` | `./output` | Output root for `--eval_only` results |
 | `--exp_name` | `medseg` | Run name — sets checkpoint and log path |
-| `--vision_pretrained` | — | Path to SAM ViT-H weights (`sam_vit_h_4b8939.pth`) |
+| `--vision_pretrained` | — | Path to SAM-family weights (`sam_vit_h_4b8939.pth` or `medsam_vit_b.pth`) |
+| `--sam_variant` | `sam_vit_h` | Visual backbone: `sam_vit_h` or `medsam_vit_b` (must match `--vision_pretrained`) |
 | `--resume` | — | DeepSpeed checkpoint path to resume from |
 | `--epochs` | `10` | Training epochs |
 | `--steps_per_epoch` | `500` | Gradient steps per epoch |
