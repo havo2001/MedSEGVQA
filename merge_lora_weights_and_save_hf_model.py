@@ -57,9 +57,41 @@ def parse_args(args):
     return parser.parse_args(args)
 
 
+def _detect_sam_variant(state_dict):
+    """Infer SAM variant from a saved LISA state_dict by inspecting the
+    image_encoder patch_embed width. Returns one of the keys in
+    model.LISA._SAM_BUILDERS, or None if it can't be determined."""
+    candidates = [
+        "base_model.model.model.visual_model.image_encoder.patch_embed.proj.weight",
+        "model.visual_model.image_encoder.patch_embed.proj.weight",
+    ]
+    for key in candidates:
+        if key in state_dict:
+            embed_dim = state_dict[key].shape[0]
+            if embed_dim == 768:
+                return "medsam_vit_b"
+            if embed_dim == 1280:
+                return "sam_vit_h"
+            raise ValueError(
+                f"Unexpected image_encoder embed_dim={embed_dim} in checkpoint."
+            )
+    return None
+
+
 def main(args):
     args = parse_args(args)
     os.makedirs(args.vis_save_path, exist_ok=True)
+
+    # Auto-detect SAM variant from the checkpoint so the merge works regardless
+    # of what was passed on the command line.
+    state_dict = torch.load(args.weight, map_location="cpu")
+    detected = _detect_sam_variant(state_dict)
+    if detected is not None and detected != args.sam_variant:
+        print(
+            f"[merge] Overriding --sam_variant={args.sam_variant} with "
+            f"{detected} detected from checkpoint."
+        )
+        args.sam_variant = detected
 
     # Create model
     tokenizer = transformers.AutoTokenizer.from_pretrained(
@@ -146,7 +178,6 @@ def main(args):
 
     model.resize_token_embeddings(len(tokenizer))
 
-    state_dict = torch.load(args.weight, map_location="cpu")
     model.load_state_dict(state_dict, strict=True)
 
     model = model.merge_and_unload()
