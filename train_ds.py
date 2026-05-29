@@ -21,9 +21,12 @@ from torch.utils.tensorboard import SummaryWriter
 
 from model.LISA import LISAForCausalLM
 from model.llava import conversation as conversation_lib
+from model.llava.mm_utils import tokenizer_image_token
 from utils.dataset import MedDataset, collate_fn
+from utils.text_metrics import compute_all as compute_text_metrics
 from utils.utils import (
-    DEFAULT_IM_END_TOKEN, DEFAULT_IM_START_TOKEN,
+    DEFAULT_IM_END_TOKEN, DEFAULT_IM_START_TOKEN, DEFAULT_IMAGE_TOKEN,
+    IMAGE_TOKEN_INDEX,
     AverageMeter, ProgressMeter, Summary, dict_to_cuda,
     intersectionAndUnionGPU,
 )
@@ -316,7 +319,7 @@ def main(args):
 
     # ---- eval only ----
     if args.eval_only:
-        validate(eval_loader, model_engine, 0, writer, args,
+        validate(eval_loader, model_engine, 0, writer, args, tokenizer,
                  dataset_name=args.val_dataset, save_output=True)
         return
 
@@ -331,7 +334,8 @@ def main(args):
             scores = []
             for ds_name, v_loader in val_loaders.items():
                 giou, ciou = validate(
-                    v_loader, model_engine, epoch, writer, args, dataset_name=ds_name
+                    v_loader, model_engine, epoch, writer, args, tokenizer,
+                    dataset_name=ds_name,
                 )
                 scores.append(giou)
             avg_giou = sum(scores) / len(scores)
@@ -358,16 +362,14 @@ def main(args):
                 model_engine.load_checkpoint(save_dir)
                 if args.local_rank == 0:
                     print(f"Loaded best checkpoint from {save_dir} for test")
-            validate(test_loader, model_engine, args.epochs, writer, args,
+            validate(test_loader, model_engine, args.epochs, writer, args, tokenizer,
                      dataset_name=args.val_dataset, save_output=True)
             if args.distributed:
                 torch.distributed.barrier()
             
 
 
-# ---------------------------------------------------------------------------
 # train
-# ---------------------------------------------------------------------------
 
 def train(train_loader, model, epoch, scheduler, writer, train_iter, args):
     batch_time       = AverageMeter("Time",        ":6.3f")
@@ -453,11 +455,40 @@ def train(train_loader, model, epoch, scheduler, writer, train_iter, args):
     return train_iter
 
 
-# ---------------------------------------------------------------------------
-# validate
-# ---------------------------------------------------------------------------
 
-def validate(val_loader, model_engine, epoch, writer, args,
+# validate
+
+
+def _build_gen_prompt(question: str, args) -> str:
+    """Build a single-turn LISA prompt with an empty assistant slot for generation."""
+    conv = conversation_lib.conv_templates[args.conv_type].copy()
+    conv.messages = []
+    user_msg = DEFAULT_IMAGE_TOKEN + "\n" + question
+    if args.use_mm_start_end:
+        user_msg = user_msg.replace(
+            DEFAULT_IMAGE_TOKEN,
+            DEFAULT_IM_START_TOKEN + DEFAULT_IMAGE_TOKEN + DEFAULT_IM_END_TOKEN,
+        )
+    conv.append_message(conv.roles[0], user_msg)
+    conv.append_message(conv.roles[1], "")
+    return conv.get_prompt()
+
+
+def _clean_generated_answer(text: str) -> str:
+    """Strip [SEG], control whitespace, and trailing punctuation from a generated answer."""
+    # Truncate if the model rolled into a second turn.
+    for stop in ("USER:", "ASSISTANT:", "<|im_end|>"):
+        if stop in text:
+            text = text.split(stop, 1)[0]
+    text = text.replace("[SEG]", "")
+    text = text.replace("</s>", "")
+    text = text.replace("\n", " ")
+    while "  " in text:
+        text = text.replace("  ", " ")
+    return text.strip(" .")
+
+
+def validate(val_loader, model_engine, epoch, writer, args, tokenizer,
              dataset_name="val", save_output=False):
     """
     Run one validation pass.
@@ -468,12 +499,17 @@ def validate(val_loader, model_engine, epoch, writer, args,
                       {output_dir}/{dataset_name}/masks/<stem>_pred.png
                     and writes a JSON summary to
                       {output_dir}/{dataset_name}/test.json
-                    Each entry: {"image", "predicted_mask", "answer"}
+                    Each entry: {"image", "question", "predicted_mask",
+                                 "answer", "predicted_answer",
+                                 "bleu1", "rouge_l", "f1"}
     """
     intersection_meter = AverageMeter("Intersec", ":6.3f", Summary.SUM)
-    union_meter        = AverageMeter("Union",    ":6.3f", Summary.SUM)
-    acc_iou_meter      = AverageMeter("gIoU",     ":6.3f", Summary.SUM)
-    acc_dice_meter     = AverageMeter("gDice",    ":6.3f", Summary.SUM)
+    union_meter = AverageMeter("Union", ":6.3f", Summary.SUM)
+    acc_iou_meter = AverageMeter("gIoU", ":6.3f", Summary.SUM)
+    acc_dice_meter = AverageMeter("gDice", ":6.3f", Summary.SUM)
+    bleu_meter  = AverageMeter("BLEU-1",  ":6.4f", Summary.AVERAGE)
+    rouge_meter = AverageMeter("ROUGE-L", ":6.4f", Summary.AVERAGE)
+    f1_meter    = AverageMeter("F1",      ":6.4f", Summary.AVERAGE)
 
     model_engine.eval()
 
@@ -504,10 +540,42 @@ def validate(val_loader, model_engine, epoch, writer, args,
         output_list = (pred_masks[0] > 0).int()
         assert len(pred_masks) == 1
 
-        # ---- save output (eval_only, rank 0) ----
+        # ---- QA: generate answer text from the question alone ----
+        raw_question = input_dict["raw_questions_list"][0]
+        gt_answer    = input_dict["questions_list"][0]
+
+        gen_prompt = _build_gen_prompt(raw_question, args)
+        gen_input_ids = tokenizer_image_token(
+            gen_prompt, tokenizer, return_tensors="pt"
+        ).unsqueeze(0).cuda()
+
+        gt_mask_hw = input_dict["masks_list"][0].shape[-2:]
+        original_size_list = [(int(gt_mask_hw[0]), int(gt_mask_hw[1]))]
+
+        with torch.no_grad():
+            gen_output_ids, _ = model_engine.module.evaluate(
+                input_dict["images_clip"],
+                input_dict["images"],
+                gen_input_ids,
+                input_dict["resize_list"],
+                original_size_list,
+                max_new_tokens=128,
+                tokenizer=tokenizer,
+            )
+
+        # generated tokens follow the prompt; slice them off and decode
+        new_ids = gen_output_ids[0][gen_input_ids.shape[1]:]
+        pred_answer = tokenizer.decode(new_ids, skip_special_tokens=True)
+        pred_answer = _clean_generated_answer(pred_answer)
+
+        text_m = compute_text_metrics(pred_answer, gt_answer)
+        bleu_meter.update(text_m["bleu1"])
+        rouge_meter.update(text_m["rouge_l"])
+        f1_meter.update(text_m["f1"])
+
+        #  save output (eval_only, rank 0)
         if save_output and args.local_rank == 0:
             image_path = input_dict["image_paths"][0]
-            answer     = input_dict["questions_list"][0]  # ground-truth answer text
             image_stem = os.path.splitext(os.path.basename(image_path))[0]
 
             # save predicted binary mask (resize back to original image resolution)
@@ -523,12 +591,17 @@ def validate(val_loader, model_engine, epoch, writer, args,
             cv2.imwrite(mask_abs, pred_np * 255)
 
             results.append({
-                "image":          image_path,
-                "predicted_mask": mask_rel,
-                "answer":         answer,
+                "image":            image_path,
+                "question":         raw_question,
+                "predicted_mask":   mask_rel,
+                "answer":           gt_answer,
+                "predicted_answer": pred_answer,
+                "bleu1":            text_m["bleu1"],
+                "rouge_l":          text_m["rouge_l"],
+                "f1":               text_m["f1"],
             })
 
-        # ---- metrics ----
+        # metrics
         intersection, union, acc_iou, acc_dice = 0.0, 0.0, 0.0, 0.0
         for mask_i, output_i in zip(masks_list, output_list):
             intersection_i, union_i, _ = intersectionAndUnionGPU(
@@ -551,11 +624,14 @@ def validate(val_loader, model_engine, epoch, writer, args,
         union_meter.update(union.cpu().numpy())
         acc_iou_meter.update(acc_iou.cpu().numpy() / n, n=n)
 
-    # ---- aggregate across GPUs ----
+    # across GPUs (since using deepspeed)
     intersection_meter.all_reduce()
     union_meter.all_reduce()
     acc_iou_meter.all_reduce()
     acc_dice_meter.all_reduce()
+    bleu_meter.all_reduce()
+    rouge_meter.all_reduce()
+    f1_meter.all_reduce()
 
     iou_class  = intersection_meter.sum / (union_meter.sum + 1e-10)
     dice_class = 2 * intersection_meter.sum / (union_meter.sum + intersection_meter.sum + 1e-10)
@@ -563,17 +639,24 @@ def validate(val_loader, model_engine, epoch, writer, args,
     giou  = acc_iou_meter.avg[1]
     cdice = dice_class[1]
     gdice = acc_dice_meter.avg[1]
+    bleu1  = bleu_meter.avg
+    rougel = rouge_meter.avg
+    f1     = f1_meter.avg
 
     if args.local_rank == 0:
         if writer is not None:
-            writer.add_scalar(f"val/{dataset_name}/giou",  giou,  epoch)
-            writer.add_scalar(f"val/{dataset_name}/ciou",  ciou,  epoch)
-            writer.add_scalar(f"val/{dataset_name}/gdice", gdice, epoch)
-            writer.add_scalar(f"val/{dataset_name}/cdice", cdice, epoch)
+            writer.add_scalar(f"val/{dataset_name}/giou",    giou,   epoch)
+            writer.add_scalar(f"val/{dataset_name}/ciou",    ciou,   epoch)
+            writer.add_scalar(f"val/{dataset_name}/gdice",   gdice,  epoch)
+            writer.add_scalar(f"val/{dataset_name}/cdice",   cdice,  epoch)
+            writer.add_scalar(f"val/{dataset_name}/bleu1",   bleu1,  epoch)
+            writer.add_scalar(f"val/{dataset_name}/rouge_l", rougel, epoch)
+            writer.add_scalar(f"val/{dataset_name}/f1",      f1,     epoch)
         print(f"[{dataset_name}] giou: {giou:.4f}  ciou: {ciou:.4f}  "
-              f"gdice: {gdice:.4f}  cdice: {cdice:.4f}")
+              f"gdice: {gdice:.4f}  cdice: {cdice:.4f}  "
+              f"bleu1: {bleu1:.4f}  rouge_l: {rougel:.4f}  f1: {f1:.4f}")
 
-        # ---- write output JSON (eval_only) ----
+        # json output (eval_only)
         if save_output and results:
             out_json = os.path.join(args.output_dir, dataset_name, "test.json")
             with open(out_json, "w") as f:

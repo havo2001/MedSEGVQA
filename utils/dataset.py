@@ -26,6 +26,7 @@ def collate_fn(
     label_list           = []
     resize_list          = []
     questions_list       = []
+    raw_questions_list   = []
     sampled_classes_list = []
     offset_list          = [0]
     cnt                  = 0
@@ -33,7 +34,7 @@ def collate_fn(
 
     for (
         image_path, images, images_clip, conversations,
-        masks, label, resize, questions, sampled_classes, inference,
+        masks, label, resize, questions, raw_question, sampled_classes, inference,
     ) in batch:
         image_path_list.append(image_path)
         images_list.append(images)
@@ -43,6 +44,7 @@ def collate_fn(
         masks_list.append(masks.float())
         resize_list.append(resize)
         questions_list.append(questions)
+        raw_questions_list.append(raw_question)
         sampled_classes_list.append(sampled_classes)
         cnt += len(conversations)
         offset_list.append(cnt)
@@ -113,6 +115,7 @@ def collate_fn(
         "resize_list":         resize_list,
         "offset":              torch.LongTensor(offset_list),
         "questions_list":      questions_list,
+        "raw_questions_list":  raw_questions_list,
         "sampled_classes_list": sampled_classes_list,
         "inference":           inferences[0],
         "conversation_list":   conversation_list,
@@ -246,6 +249,7 @@ class MedDataset(torch.utils.data.Dataset):
             labels,        # [H, W]           float  — ignore canvas
             resize,        # (h, w) after SAM resize, before padding
             answer,        # str  — ground-truth answer; surfaced via questions_list in batch
+            question,      # str  — raw question text; surfaced via raw_questions_list in batch
             None,          # sampled_classes  — unused, kept for collate_fn compat
             self.inference,
         )
