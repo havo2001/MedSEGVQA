@@ -188,8 +188,14 @@ class MedDataset(torch.utils.data.Dataset):
         return [conv.get_prompt()]
 
     def preprocess(self, x: torch.Tensor) -> torch.Tensor:
-        """Normalize and pad to img_size × img_size."""
-        x = (x - self.pixel_mean) / self.pixel_std
+        """Normalize and pad to img_size × img_size.
+        SAM (sam_vit_h) expects ImageNet mean/std normalization
+        MedSAM (medsam_vit_b) expects a plain min–max rescale to [0, 1] 
+        """
+        if self.sam_variant == "medsam_vit_b":
+            x = x / 255.0
+        else:
+            x = (x - self.pixel_mean) / self.pixel_std
         h, w = x.shape[-2:]
         x = F.pad(x, (0, self.img_size - w, 0, self.img_size - h))
         return x
