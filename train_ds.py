@@ -324,7 +324,8 @@ def main(args):
         return
 
     # ---- training loop ----
-    best_score, cur_ciou = 0.0, 0.0
+    # Best checkpoint is selected on mean per-image Dice (gdice), the metric
+    best_score = 0.0
     train_iter = iter(train_loader)
 
     for epoch in range(args.start_epoch, args.epochs):
@@ -333,15 +334,14 @@ def main(args):
         if val_loaders:
             scores = []
             for ds_name, v_loader in val_loaders.items():
-                giou, ciou = validate(
+                giou, ciou, gdice = validate(
                     v_loader, model_engine, epoch, writer, args, tokenizer,
                     dataset_name=ds_name,
                 )
-                scores.append(giou)
-            avg_giou = sum(scores) / len(scores)
-            is_best = avg_giou > best_score
-            best_score = max(avg_giou, best_score)
-            cur_ciou = ciou if is_best else cur_ciou  # ciou from last dataset
+                scores.append(gdice)
+            avg_gdice = sum(scores) / len(scores)
+            is_best = avg_gdice > best_score
+            best_score = max(avg_gdice, best_score)
         else:
             is_best = True  # always save when no eval
 
@@ -663,7 +663,7 @@ def validate(val_loader, model_engine, epoch, writer, args, tokenizer,
                 json.dump(results, f, indent=2)
             print(f"Saved {len(results)} results → {out_json}")
 
-    return giou, ciou
+    return giou, ciou, gdice
 
 
 if __name__ == "__main__":
