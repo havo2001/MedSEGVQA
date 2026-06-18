@@ -56,6 +56,12 @@ def parse_args(args):
         help="Dataset name for --eval_only. "
              "Loads {dataset_dir}/{name}/{val_split}.json and saves output.",
     )
+    parser.add_argument(
+        "--test_datasets", default="", type=str,
+        help="Comma-separated dataset names for the final test / --eval_only. "
+             "Each is tested and recorded separately under {output_dir}/{name}/. "
+             "Falls back to --val_dataset when empty.",
+    )
     parser.add_argument("--val_split", default="test", choices=["val", "test"],
                         help="Split used with --eval_only (default: test).")
     parser.add_argument("--dataset_dir", default="./dataset", type=str)
@@ -135,6 +141,11 @@ def _make_val_loader(ds_name, split, args, tokenizer, _collate):
 
 def main(args):
     args = parse_args(args)
+    test_ds_names = [
+        n.strip()
+        for n in (args.test_datasets or args.val_dataset).split(",")
+        if n.strip()
+    ]
     args.log_dir = os.path.join(args.log_base_dir, args.exp_name)
     if args.local_rank == 0:
         os.makedirs(args.log_dir, exist_ok=True)
@@ -265,10 +276,6 @@ def main(args):
                 val_loaders[ds_name] = loader
                 print(f"Val [{ds_name}]: {len(loader.dataset)} samples")
 
-    # ---- eval_only: single dataset, saves output JSON ----
-    if args.eval_only:
-        eval_loader = _make_val_loader(args.val_dataset, args.val_split, args, tokenizer, _collate)
-
     # ---- DeepSpeed ----
     ds_config = {
         "train_micro_batch_size_per_gpu": args.batch_size,
@@ -319,8 +326,11 @@ def main(args):
 
     # ---- eval only ----
     if args.eval_only:
-        validate(eval_loader, model_engine, 0, writer, args, tokenizer,
-                 dataset_name=args.val_dataset, save_output=True)
+        for ds_name in test_ds_names:
+            eval_loader = _make_val_loader(ds_name, args.val_split, args, tokenizer, _collate)
+            if eval_loader is not None:
+                validate(eval_loader, model_engine, 0, writer, args, tokenizer,
+                         dataset_name=ds_name, save_output=True)
         return
 
     # ---- training loop ----
@@ -353,19 +363,20 @@ def main(args):
             torch.distributed.barrier()
             model_engine.save_checkpoint(save_dir)
 
-    # ---- post-training test on {val_dataset}/{val_split} ----
+    # ---- post-training test on each {test_dataset}/{val_split}, recorded separately ----
     if not args.eval_only:
-        test_loader = _make_val_loader(args.val_dataset, args.val_split, args, tokenizer, _collate)
-        if test_loader is not None:
-            save_dir = os.path.join(args.log_dir, "ckpt_model")
-            if os.path.exists(save_dir):
-                model_engine.load_checkpoint(save_dir)
-                if args.local_rank == 0:
-                    print(f"Loaded best checkpoint from {save_dir} for test")
-            validate(test_loader, model_engine, args.epochs, writer, args, tokenizer,
-                     dataset_name=args.val_dataset, save_output=True)
-            if args.distributed:
-                torch.distributed.barrier()
+        save_dir = os.path.join(args.log_dir, "ckpt_model")
+        if os.path.exists(save_dir):
+            model_engine.load_checkpoint(save_dir)
+            if args.local_rank == 0:
+                print(f"Loaded best checkpoint from {save_dir} for test")
+        for ds_name in test_ds_names:
+            test_loader = _make_val_loader(ds_name, args.val_split, args, tokenizer, _collate)
+            if test_loader is not None:
+                validate(test_loader, model_engine, args.epochs, writer, args, tokenizer,
+                         dataset_name=ds_name, save_output=True)
+        if args.distributed:
+            torch.distributed.barrier()
             
 
 
