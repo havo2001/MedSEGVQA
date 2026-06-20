@@ -123,6 +123,9 @@ def _make_val_loader(ds_name, split, args, tokenizer, _collate):
         inference=True,
         sam_variant=args.sam_variant,
     )
+    if len(ds) == 0:
+        print(f"[warn] {json_path} is empty — skipping {ds_name}")
+        return None
     sampler = torch.utils.data.distributed.DistributedSampler(ds, shuffle=False, drop_last=False)
     return torch.utils.data.DataLoader(
         ds,
